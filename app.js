@@ -2,6 +2,7 @@
 const $=id=>document.getElementById(id), KEY='scripture-desk:v1:';
 const get=(k,d)=>{try{return JSON.parse(localStorage.getItem(KEY+k))??d}catch{return d}};
 const put=(k,v)=>{try{localStorage.setItem(KEY+k,JSON.stringify(v));return true}catch{return false}};
+let bibleyBase='', bibleyStarting=false;
 let library=[], ed, book, chapter, rows=[], marks=get('marks',[]), mode='explain', ai=false, bibleyReady=false, version=0, openInstall, pending=null;
 const files=new Map();
 async function local(path){const r=await fetch(path,{signal:AbortSignal.timeout?AbortSignal.timeout(15000):undefined});if(!r.ok)throw Error('read');return r.json()}
@@ -88,8 +89,9 @@ function refreshBibley(){
  if(!allowed)$('ai-feedback').textContent=mode==='compare'?'Bibley uses the KJV only. Copy the prompt to compare traditions elsewhere.':'This passage is outside Bibley’s KJV library. You can still copy the study prompt.';
 }
 async function checkBibley(){
- try{const s=await local('api/bibley/status');bibleyReady=s.ready===true;$('ai-state').textContent=bibleyReady?'Bibley is ready. Its KJV-based commentary is separate from the edition you’re reading.':s.status==='starting'?'Bibley is loading. Check again when the Bibley window says Ready.':s.status==='error'?'Bibley couldn’t load. Check its Terminal window.':'Start Bibley on this computer, then check again.';}
- catch{bibleyReady=false;$('ai-state').textContent='The local Bibley connection is unavailable.';}
+ try{const s=await local(bibleyBase+'api/bibley/status');bibleyReady=s.ready===true;bibleyStarting=s.status==='starting';$('ai-state').textContent=bibleyReady?'Bibley is ready. Its KJV-based commentary is separate from the edition you’re reading.':bibleyStarting?'Bibley is warming up; this can take a minute.':s.status==='error'?'Bibley couldn’t load. Try again later.':'Bibley is unavailable right now.';}
+ catch{bibleyReady=false;bibleyStarting=false;$('ai-state').textContent='Bibley is unavailable right now.';}
+ if(bibleyStarting&&$('study').open)setTimeout(()=>{if($('study').open&&!bibleyReady)checkBibley()},5000);
  $('bibley-check').hidden=bibleyReady;refreshBibley();
 }
 $('bibley-check').onclick=checkBibley;
@@ -109,7 +111,7 @@ $('ask').onclick=async()=>{
  $('ai-feedback').textContent=usingBibley?'Bibley is thinking…':'Waiting for your AI…';
  const timeout=setTimeout(()=>ctl.abort(),usingBibley?120000:45000);
  try{
-  const endpoint=usingBibley?'api/bibley/study':'api/study';
+  const endpoint=usingBibley?bibleyBase+'api/bibley/study':'api/study';
   const data=usingBibley?{mode,reference:bibleyRef(),question:$('question').value.trim()}:payload();
   const headers={'Content-Type':'application/json'};if(usingBibley)headers['X-Scripture-Desk']='bibley-v1';
   const res=await fetch(endpoint,{method:'POST',headers,body:JSON.stringify(data),signal:ctl.signal,credentials:'same-origin',redirect:'error'});
@@ -129,10 +131,10 @@ applyPrefs();
 if(location.protocol==='https:'&&location.hostname!=='appassets.androidplatform.net'&&location.hostname!=='127.0.0.1'&&location.hostname!=='localhost')$('bibley-local').hidden=false;
 local('ai-config.json').then(c=>{
  if(c.enabled!==true||location.hostname==='appassets.androidplatform.net')return;
- ai=c.provider==='bibley'?'bibley':true;$('ask').hidden=false;$('ai-privacy').hidden=false;$('bibley-local').hidden=true;
+ ai=c.provider==='bibley'?'bibley':true; if(ai==='bibley'&&typeof c.endpoint==='string'&&c.endpoint.startsWith('https://'))bibleyBase=c.endpoint.replace(/\/$/,'')+'/';$('ask').hidden=false;$('ai-privacy').hidden=false;$('bibley-local').hidden=true;
  $('ai-state').textContent='AI commentary is separate from Scripture. Check citations against the passage.';
  if(ai==='bibley'){
-  $('ask').textContent='Ask Bibley';$('ai-privacy').textContent='Only your question and a verse reference go to Bibley on this computer. Bibley keeps them in memory until it closes.';
+  $('ask').textContent='Ask Bibley';$('ai-privacy').textContent=bibleyBase?'Your question and verse reference are sent to Bibley’s hosted service.':'Only your question and a verse reference go to Bibley on this computer. Bibley keeps them in memory until it closes.';
   if($('study').open)checkBibley();else refreshBibley();
  }
 }).catch(()=>{});
