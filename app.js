@@ -18,7 +18,7 @@ function setBookmark(){const on=marks.some(x=>same(x,current()));$('bookmark').s
 function status(t){$('status').textContent=t}
 function hashSelection(){const a=new URLSearchParams(location.hash.slice(1));return a.has('edition')?{edition:a.get('edition'),book:a.get('book'),chapter:a.get('chapter'),verse:a.get('verse')}:null}
 function navigate(selection={}, verse=null, focus=false){
-  pending?.abort(); pending=null;
+  pending?.abort(); pending=null; selectedVerse=null; $('verse-tools').hidden=true; $('verses').before($('verse-tools'));
   ed=library.find(e=>e.id===selection.edition)||library.find(e=>e.id==='protestant')||library[0];book=ed.books.find(b=>b.id===selection.book)||ed.books[0];
   chapter=book.chapters.includes(selection.chapter)?selection.chapter:book.chapters[0];
   const state=current(); put('last',state);
@@ -44,14 +44,25 @@ async function render(step,b,c,target,focus){
     if(!Array.isArray(res[c])||!res[c].length)throw Error('chapter');
     rows=res[c];const frag=document.createDocumentFragment();
     let hit;
-    for(const [n,text] of rows){const p=document.createElement('p'), v=document.createElement('sup'); v.textContent=n; p.append(v,document.createTextNode(text));
-      if(target&&String(n)===String(target)&&!hit){hit=p;p.className='target';p.tabIndex=-1;}
+    for(const [n,text] of rows){const p=document.createElement('p'), v=document.createElement('sup'); v.textContent=n; p.append(v,document.createTextNode(text)); p.classList.toggle('highlighted',!!annotations[verseKey(n)]?.highlight); p.classList.toggle('has-note',!!annotations[verseKey(n)]?.note); p.tabIndex=0; p.setAttribute('role','button'); p.setAttribute('aria-label',`${ref()}:${n}. Select verse tools`); p.addEventListener('click',()=>selectVerse(n)); p.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();selectVerse(n)}});
+      if(target&&String(n)===String(target)&&!hit){hit=p;p.classList.add('target');}
       frag.append(p);
     }
     $('verses').replaceChildren(frag);status('');
     if(hit){hit.focus({preventScroll:true});hit.scrollIntoView({block:'center'});}else if(target){status(`Verse ${target} isn’t numbered that way in this edition.`);}
   }catch(e){if(step!==version)return;status('This passage isn’t available offline yet. Reconnect, then retry.');const btn=document.createElement('button');btn.textContent='Retry passage';btn.onclick=()=>render(step,b,c,target,focus);$('verses').replaceChildren(btn);}
 }
+let selectedVerse=null, annotations=get('annotations',{}); if(!annotations || typeof annotations!=='object' || Array.isArray(annotations))annotations={};
+function verseKey(n){return [ed.id,book.id,chapter,String(n)].join(':')}
+function selectVerse(n){selectedVerse=String(n);const v=rows.find(([i])=>String(i)===selectedVerse);if(!v)return;const url=new URLSearchParams(current());url.set('verse',selectedVerse);history.replaceState(null,'','#'+url);$('selected-ref').textContent=ref()+':'+selectedVerse+' · '+ed.tag; $('verse-tools').hidden=false; $('verse-note-editor').hidden=true; $('verse-feedback').textContent='';$('verse-highlight').setAttribute('aria-pressed',!!annotations[verseKey(n)]?.highlight);const element=[...$('verses').children].find(p=>p.querySelector('sup')?.textContent===selectedVerse);element?.after($('verse-tools'));$('verse-tools').scrollIntoView({block:'nearest'});}
+$('verse-close').onclick=()=>{selectedVerse=null;$('verse-tools').hidden=true;const url=new URLSearchParams(current());history.replaceState(null,'','#'+url)};
+$('verse-highlight').onclick=()=>{if(!selectedVerse)return;const k=verseKey(selectedVerse),old=annotations[k]||{},next={...annotations,[k]:{...old,highlight:!old.highlight}};if(!put('annotations',next)){ $('verse-feedback').textContent='Could not save on this device.';return;}annotations=next;$('verse-highlight').setAttribute('aria-pressed',!!next[k].highlight); const el=[...$('verses').children].find(p=>p.querySelector('sup')?.textContent===selectedVerse);el?.classList.toggle('highlighted',!!next[k].highlight);$('verse-feedback').textContent=next[k].highlight?'Highlight saved on this device.':'Highlight removed.'};
+$('verse-note').onclick=()=>{if(!selectedVerse)return;$('verse-note-text').value=annotations[verseKey(selectedVerse)]?.note||'';$('verse-note-editor').hidden=false;$('verse-note-text').focus()};
+$('verse-note-save').onclick=()=>{if(!selectedVerse)return;const k=verseKey(selectedVerse),old=annotations[k]||{},next={...annotations,[k]:{...old,note:$('verse-note-text').value.trim()}};if(!put('annotations',next)){$('verse-feedback').textContent='Could not save on this device.';return;}annotations=next;const el=[...$('verses').children].find(p=>p.querySelector('sup')?.textContent===selectedVerse);el?.classList.toggle('has-note',!!next[k].note);$('verse-note-editor').hidden=true;$('verse-feedback').textContent=next[k].note?'Note saved on this device.':'Note removed.'};
+$('verse-copy').onclick=async()=>{const row=rows.find(([n])=>String(n)===selectedVerse);if(!row)return;try{await navigator.clipboard.writeText(`${ref()}:${selectedVerse} (${ed.tag}) ${row[1]}`);$('verse-feedback').textContent='Verse copied.'}catch{$('verse-feedback').textContent='Copy unavailable in this browser; select the verse text instead.'}};
+$('verse-study').onclick=()=>{if(!selectedVerse)return;$('study-ref').textContent=ref()+':'+selectedVerse+' · '+ed.tag;cleanStudy();if(ai==='bibley')checkBibley();openDialog('study',$('verse-study'))};
+$('read-aloud').onclick=()=>{if(!('speechSynthesis' in window)){status('Read aloud is not available in this browser.');return}if(speechSynthesis.speaking){speechSynthesis.cancel();status('Reading stopped.')}else{speechSynthesis.speak(new SpeechSynthesisUtterance(ref()+'. '+rows.map(([n,t])=>n+'. '+t).join(' ')));status('Reading aloud. Use the chapter menu to stop.')}if($('chapter-tools').open)$('chapter-tools').close()};
+$('focus-mode').onclick=()=>{document.body.classList.toggle('focus-mode');if($('chapter-tools').open)$('chapter-tools').close();status(document.body.classList.contains('focus-mode')?'Focus mode on. Use chapter tools to turn it off.':'Focus mode off.')};
 function shift(d){let i=ed.books.indexOf(book),j=book.chapters.indexOf(chapter)+d;if(book.chapters[j])return navigate({...current(),chapter:book.chapters[j]},null,true);const adjacent=ed.books[i+d];if(adjacent)navigate({edition:ed.id,book:adjacent.id,chapter:d<0?adjacent.chapters.at(-1):adjacent.chapters[0]},null,true)}
 const normalize=s=>s.toLowerCase().normalize('NFKD').replace(/\p{M}/gu,'').replace(/[^\p{L}\d]/gu,'');
 $('jump').onsubmit=e=>{
@@ -118,7 +129,7 @@ $('ask').onclick=async()=>{
   if(!res.ok)throw Error(res.status===503?'starting':res.status===429?'busy':'failed');
   const reply=await res.json();if(typeof reply.answer!=='string'||!reply.answer.trim())throw Error('invalid');if(pending!==ctl)return;
   $('ai-answer').textContent=reply.answer.slice(0,30000);$('ai-answer').hidden=false;
-  $('ai-feedback').textContent=usingBibley?'Bibley commentary · KJV references · not Scripture':'AI commentary · not Scripture';
+  $('ai-feedback').textContent=usingBibley?'Bibley commentary · KJV references · answers may be incomplete or mistaken; check against Scripture.':'AI commentary · not Scripture';
  }catch(err){if(pending===ctl)$('ai-feedback').textContent=err.message==='starting'?'Bibley is still starting. Try again when it’s ready.':err.message==='busy'?'Bibley is finishing another question. Try again shortly.':usingBibley?'Bibley couldn’t answer. Check that it’s still running and try again.':'Your AI couldn’t answer. Try again in a moment.';}
  finally{clearTimeout(timeout);if(pending===ctl){pending=null;if(usingBibley)refreshBibley();else $('ask').disabled=false;}}
 };
